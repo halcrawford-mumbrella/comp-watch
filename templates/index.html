@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comp Watch</title>
+<style>
+  :root {
+    --bg: #f0f0f3;
+    --surface: #fff;
+    --text: #111;
+    --meta: #777;
+    --border: #e4e4e4;
+    --header: #11111f;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  header {
+    background: var(--header);
+    color: #fff;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+  }
+
+  header h1 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  #status {
+    font-size: 0.72rem;
+    color: #888;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4caf50;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .filters {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 49px;
+    z-index: 99;
+  }
+
+  .filter-btn {
+    border-radius: 14px;
+    padding: 4px 11px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    border: 1.5px solid transparent;
+    transition: opacity 0.15s, transform 0.1s;
+    text-transform: uppercase;
+  }
+
+  .filter-btn:not(.active) {
+    opacity: 0.35;
+  }
+
+  .filter-btn:hover { transform: scale(1.05); }
+
+  .headlines {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 14px 16px;
+  }
+
+  .item {
+    background: var(--surface);
+    border-radius: 6px;
+    margin-bottom: 7px;
+    padding: 11px 14px 11px 17px;
+    border-left: 4px solid #ccc;
+    transition: box-shadow 0.1s;
+  }
+
+  .item:hover {
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  }
+
+  .item-meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 5px;
+  }
+
+  .item-source {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .item-time {
+    font-size: 0.68rem;
+    color: var(--meta);
+  }
+
+  .item-title {
+    font-size: 0.93rem;
+    line-height: 1.45;
+    color: var(--text);
+    text-decoration: none;
+    display: block;
+  }
+
+  .item-title:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--meta);
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Comp Watch</h1>
+  <div id="status">
+    <span id="pulse"></span>
+    <span id="last-updated">Loading…</span>
+  </div>
+</header>
+
+<div class="filters" id="filters"></div>
+
+<div class="headlines" id="headlines">
+  <div class="empty">Fetching headlines…</div>
+</div>
+
+<script>
+const SOURCES = [
+  { key: 'bandt',         label: 'B&T',            color: '#e84c3d' },
+  { key: 'campaignbrief', label: 'Campaign Brief',  color: '#2196f3' },
+  { key: 'mediaweek',     label: 'Mediaweek',       color: '#2e9e57' },
+  { key: 'mi3',           label: 'Mi3',             color: '#ff9800' },
+  { key: 'lbbonline',     label: 'LBBOnline',       color: '#9c27b0' },
+  { key: 'adnews',        label: 'AdNews',          color: '#00a3c4' },
+];
+
+const NAME_TO_KEY = {
+  'B&T': 'bandt',
+  'Campaign Brief': 'campaignbrief',
+  'Mediaweek': 'mediaweek',
+  'Mi3': 'mi3',
+  'LBBOnline': 'lbbonline',
+  'AdNews': 'adnews',
+};
+
+const COLOR = Object.fromEntries(SOURCES.map(s => [s.key, s.color]));
+const active = new Set(SOURCES.map(s => s.key));
+let allItems = [];
+
+function timeAgo(iso) {
+  if (!iso) return 'recently';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 90)      return 'just now';
+  if (diff < 3600)    return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400)   return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function render() {
+  const el = document.getElementById('headlines');
+  const visible = allItems.filter(i => active.has(NAME_TO_KEY[i.source] || ''));
+  if (!visible.length) {
+    el.innerHTML = '<div class="empty">No headlines to show.</div>';
+    return;
+  }
+  el.innerHTML = visible.map(i => {
+    const key = NAME_TO_KEY[i.source] || 'unknown';
+    const c = COLOR[key] || '#999';
+    return `<div class="item" style="border-left-color:${c}">
+      <div class="item-meta">
+        <span class="item-source" style="color:${c}">${esc(i.source)}</span>
+        <span class="item-time">${timeAgo(i.published)}</span>
+      </div>
+      <a class="item-title" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+    </div>`;
+  }).join('');
+}
+
+function buildFilters() {
+  document.getElementById('filters').innerHTML = SOURCES.map(s =>
+    `<button class="filter-btn active" data-key="${s.key}"
+      style="background:${s.color}18; color:${s.color}; border-color:${s.color}55"
+      onclick="toggle('${s.key}')">${s.label}</button>`
+  ).join('');
+}
+
+function toggle(key) {
+  active.has(key) ? active.delete(key) : active.add(key);
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', active.has(b.dataset.key));
+  });
+  render();
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/headlines');
+    const d = await r.json();
+    allItems = d.items || [];
+    if (d.last_updated) {
+      document.getElementById('last-updated').textContent = `Updated ${timeAgo(d.last_updated)}`;
+    }
+    render();
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+buildFilters();
+load();
+setInterval(load, 60_000);     // refetch every minute
+setInterval(render, 30_000);   // re-render time-ago labels every 30s
+</script>
+</body>
+</html>
