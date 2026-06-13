@@ -283,6 +283,12 @@ def headlines():
         return jsonify({"items": list(_cache), "last_updated": _last_updated})
 
 
+@app.route("/api/refresh", methods=["POST"])
+def force_refresh():
+    threading.Thread(target=refresh_all, daemon=True).start()
+    return jsonify({"status": "refresh started"})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8766))
     app.run(port=port, debug=True, use_reloader=False)
