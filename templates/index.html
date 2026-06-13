@@ -68,6 +68,7 @@
     border-bottom: 1px solid var(--border);
     padding: 10px 20px;
     display: flex;
+    align-items: center;
     gap: 6px;
     flex-wrap: wrap;
     position: sticky;
@@ -87,29 +88,65 @@
     text-transform: uppercase;
   }
 
-  .filter-btn:not(.active) {
-    opacity: 0.35;
-  }
-
+  .filter-btn:not(.active) { opacity: 0.35; }
   .filter-btn:hover { transform: scale(1.05); }
 
+  .read-controls {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+
+  .read-btn {
+    border-radius: 14px;
+    padding: 4px 11px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1.5px solid #bbb;
+    background: transparent;
+    color: #555;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .read-btn:hover { background: #eee; }
+
   .headlines {
-    max-width: 860px;
+    max-width: 1440px;
     margin: 0 auto;
     padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    align-items: start;
+  }
+
+  /* single column on narrow screens */
+  @media (max-width: 700px) {
+    .headlines { grid-template-columns: 1fr; }
+  }
+
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--meta);
+    font-size: 0.9rem;
   }
 
   .item {
     background: var(--surface);
     border-radius: 6px;
-    margin-bottom: 7px;
     padding: 11px 14px 11px 17px;
     border-left: 4px solid #ccc;
-    transition: box-shadow 0.1s;
+    transition: box-shadow 0.1s, opacity 0.2s, filter 0.2s;
   }
 
-  .item:hover {
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  .item:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+
+  .item.read {
+    filter: grayscale(1);
+    opacity: 0.4;
   }
 
   .item-meta {
@@ -140,13 +177,6 @@
   }
 
   .item-title:hover { text-decoration: underline; text-underline-offset: 2px; }
-
-  .empty {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--meta);
-    font-size: 0.9rem;
-  }
 </style>
 </head>
 <body>
@@ -188,18 +218,50 @@ const COLOR = Object.fromEntries(SOURCES.map(s => [s.key, s.color]));
 const active = new Set(SOURCES.map(s => s.key));
 let allItems = [];
 
+// ── Read state (persisted in localStorage) ─────────────────────────────────
+const LS_KEY = 'comp_watch_read';
+let readUrls = new Set(JSON.parse(localStorage.getItem(LS_KEY) || '[]'));
+let prevReadUrls = null;  // for undo
+
+function saveRead() {
+  localStorage.setItem(LS_KEY, JSON.stringify([...readUrls]));
+}
+
+function markAllRead() {
+  const visible = allItems.filter(i => active.has(NAME_TO_KEY[i.source] || ''));
+  prevReadUrls = new Set(readUrls);
+  visible.forEach(i => readUrls.add(i.url));
+  saveRead();
+  render();
+}
+
+function undoRead() {
+  if (prevReadUrls !== null) {
+    readUrls = prevReadUrls;
+    prevReadUrls = null;
+  } else {
+    readUrls = new Set();
+  }
+  saveRead();
+  render();
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function timeAgo(iso) {
   if (!iso) return 'recently';
   const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
-  if (diff < 90)      return 'just now';
-  if (diff < 3600)    return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400)   return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 90)    return 'just now';
+  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
 function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ── Render ───────────────────────────────────────────────────────────────────
 
 function render() {
   const el = document.getElementById('headlines');
@@ -211,7 +273,8 @@ function render() {
   el.innerHTML = visible.map(i => {
     const key = NAME_TO_KEY[i.source] || 'unknown';
     const c = COLOR[key] || '#999';
-    return `<div class="item" style="border-left-color:${c}">
+    const readClass = readUrls.has(i.url) ? ' read' : '';
+    return `<div class="item${readClass}" style="border-left-color:${c}">
       <div class="item-meta">
         <span class="item-source" style="color:${c}">${esc(i.source)}</span>
         <span class="item-time">${timeAgo(i.published)}</span>
@@ -222,11 +285,18 @@ function render() {
 }
 
 function buildFilters() {
-  document.getElementById('filters').innerHTML = SOURCES.map(s =>
+  const sourceBtns = SOURCES.map(s =>
     `<button class="filter-btn active" data-key="${s.key}"
       style="background:${s.color}18; color:${s.color}; border-color:${s.color}55"
       onclick="toggle('${s.key}')">${s.label}</button>`
   ).join('');
+
+  document.getElementById('filters').innerHTML =
+    sourceBtns +
+    `<div class="read-controls">
+      <button class="read-btn" onclick="markAllRead()">Mark all read</button>
+      <button class="read-btn" onclick="undoRead()">Undo</button>
+    </div>`;
 }
 
 function toggle(key) {
@@ -236,6 +306,8 @@ function toggle(key) {
   });
   render();
 }
+
+// ── Data loading ─────────────────────────────────────────────────────────────
 
 async function load() {
   try {
@@ -253,8 +325,8 @@ async function load() {
 
 buildFilters();
 load();
-setInterval(load, 60_000);     // refetch every minute
-setInterval(render, 30_000);   // re-render time-ago labels every 30s
+setInterval(load, 60_000);
+setInterval(render, 30_000);
 </script>
 </body>
 </html>
