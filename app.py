@@ -23,15 +23,26 @@ CHROME_UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
+# ── Source definitions ─────────────────────────────────────────────────────────
+
 RSS_SOURCES = [
     {"name": "B&T",           "url": "https://www.bandt.com.au/feed/"},
     {"name": "Campaign Brief","url": "https://campaignbrief.com/feed/"},
     {"name": "Mediaweek",     "url": "https://www.mediaweek.com.au/feed/"},
     {"name": "Mi3",           "url": "https://news.google.com/rss/search?q=site:mi-3.com.au&hl=en-AU&gl=AU&ceid=AU:en",
                               "strip_suffix": " - Mi-3.com.au"},
-    {"name": "LBBOnline",     "url": "https://news.google.com/rss/search?q=site:lbbonline.com&hl=en-AU&gl=AU&ceid=AU:en",
+    # LBBOnline is Cloudflare-protected with cloud-IP blocking — Google News with AU
+    # location terms gives the Australia edition content without needing direct access.
+    {"name": "LBBOnline",     "url": "https://news.google.com/rss/search?q=site:lbbonline.com+(australia+OR+%22new+zealand%22+OR+sydney+OR+melbourne+OR+brisbane+OR+auckland)&hl=en-AU&gl=AU&ceid=AU:en",
                               "strip_suffix": " - Little Black Book | LBBOnline"},
 ]
+
+# Sites that need a real browser (Cloudflare JS challenge, heavy SPA rendering, etc.)
+# Note: Cloudflare sites that also block cloud/datacenter IPs cannot be reached from
+# Railway even with a patched browser — a residential proxy would be needed for those.
+PLAYWRIGHT_SOURCES: list = []
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 _STALE_TS = re.compile(r'\s*\d+\s+(?:day|hour|minute|second)s?\s+ago\s*$', re.I)
 
@@ -51,6 +62,18 @@ def _parse_entry_date(entry) -> datetime | None:
     return None
 
 
+def _parse_date_str(s: str) -> datetime | None:
+    try:
+        dt = dateparser.parse(s)
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+# ── Fetchers ───────────────────────────────────────────────────────────────────
+
 def fetch_rss(source: dict) -> list:
     try:
         resp = requests.get(
@@ -59,8 +82,8 @@ def fetch_rss(source: dict) -> list:
             timeout=15,
         )
         feed = feedparser.parse(resp.text)
-        items = []
         suffix = source.get("strip_suffix", "")
+        items = []
         for entry in feed.entries[:25]:
             title = _STALE_TS.sub("", entry.get("title", "")).strip()
             if suffix and title.endswith(suffix):
@@ -90,31 +113,20 @@ def fetch_adnews() -> list:
         )
         soup = BeautifulSoup(resp.text, "lxml")
         items = []
-        seen = set()
-
-        # Cast a wide net for article links
+        seen: set = set()
         for a in soup.find_all("a", href=re.compile(r'/(?:news|article)/[^/]+')):
             title = a.get_text(strip=True)
             if not title or len(title) < 20 or title in seen:
                 continue
             seen.add(title)
-
             href = a["href"]
             url = href if href.startswith("http") else f"https://www.adnews.com.au{href}"
-
             pub = None
             parent = a.find_parent(["article", "div", "li", "section"])
             if parent:
                 t = parent.find("time")
                 if t:
-                    dt_str = t.get("datetime") or t.get_text(strip=True)
-                    try:
-                        pub = dateparser.parse(dt_str)
-                        if pub and pub.tzinfo is None:
-                            pub = pub.replace(tzinfo=timezone.utc)
-                    except Exception:
-                        pass
-
+                    pub = _parse_date_str(t.get("datetime") or t.get_text(strip=True))
             items.append({
                 "title": title,
                 "url": url,
@@ -123,19 +135,112 @@ def fetch_adnews() -> list:
             })
             if len(items) >= 20:
                 break
-
         return items
     except Exception as e:
         print(f"[AdNews] scrape error: {e}")
         return []
 
 
+def fetch_playwright(source: dict) -> list:
+    """Generic Playwright fetcher for JS-rendered / Cloudflare-protected sites."""
+    try:
+        from patchright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    except ImportError:
+        print(f"[{source['name']}] patchright not installed")
+        return []
+
+    items = []
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+            ctx = browser.new_context(
+                user_agent=CHROME_UA,
+                locale="en-AU",
+                timezone_id="Australia/Sydney",
+            )
+            page = ctx.new_page()
+            page.goto(source["url"], wait_until="networkidle", timeout=30_000)
+
+            # Wait for any article-like element to appear
+            for sel in source.get("article_sel", ["article"]):
+                try:
+                    page.wait_for_selector(sel, timeout=8_000)
+                    break
+                except PWTimeout:
+                    continue
+
+            # Find article containers
+            containers = []
+            for sel in source.get("article_sel", ["article"]):
+                containers = page.query_selector_all(sel)
+                if containers:
+                    break
+
+            seen: set = set()
+            for container in containers[:25]:
+                # Title
+                title = ""
+                for sel in source.get("title_sel", ["h2", "h3"]):
+                    el = container.query_selector(sel)
+                    if el:
+                        title = el.inner_text().strip()
+                        if title:
+                            break
+
+                # Link
+                href = ""
+                for sel in source.get("link_sel", ["a[href]"]):
+                    el = container.query_selector(sel)
+                    if el:
+                        href = el.get_attribute("href") or ""
+                        if href:
+                            break
+
+                if not title or not href or title in seen:
+                    continue
+                seen.add(title)
+
+                url = href if href.startswith("http") else f"https://{source['url'].split('/')[2]}{href}"
+
+                # Date
+                pub = None
+                for sel in source.get("time_sel", ["time"]):
+                    el = container.query_selector(sel)
+                    if el:
+                        dt_str = el.get_attribute("datetime") or el.inner_text().strip()
+                        pub = _parse_date_str(dt_str)
+                        if pub:
+                            break
+
+                items.append({
+                    "title": title,
+                    "url": url,
+                    "source": source["name"],
+                    "published": pub.isoformat() if pub else None,
+                })
+
+            browser.close()
+            print(f"[{source['name']}] playwright fetched {len(items)} items")
+    except Exception as e:
+        print(f"[{source['name']}] playwright error: {e}")
+
+    return items
+
+
+# ── Refresh loop ───────────────────────────────────────────────────────────────
+
 def refresh_all():
     global _last_updated
     raw = []
+
     for src in RSS_SOURCES:
         raw.extend(fetch_rss(src))
     raw.extend(fetch_adnews())
+    for src in PLAYWRIGHT_SOURCES:
+        raw.extend(fetch_playwright(src))
 
     seen_urls: set = set()
     deduped = []
@@ -150,7 +255,7 @@ def refresh_all():
         _cache[:] = deduped
         _last_updated = datetime.now(timezone.utc).isoformat()
 
-    print(f"[refresh] {len(deduped)} headlines")
+    print(f"[refresh] {len(deduped)} headlines total")
 
 
 def _background():
@@ -164,6 +269,8 @@ def _background():
 
 threading.Thread(target=_background, daemon=True).start()
 
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
