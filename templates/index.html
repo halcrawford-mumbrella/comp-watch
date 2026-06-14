@@ -38,12 +38,34 @@
     box-shadow: 0 1px 4px rgba(0,0,0,0.3);
   }
 
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .header-logo {
+    height: 20px;
+    width: auto;
+    display: block;
+  }
+
+  .header-pipe {
+    width: 1px;
+    height: 24px;
+    background: rgba(255,255,255,0.3);
+    margin: 0 14px;
+    flex-shrink: 0;
+  }
+
   header h1 {
     font-size: 0.95rem;
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
+
+  .title-watch { color: #e53935; }
 
   #status {
     font-size: 0.72rem;
@@ -185,7 +207,11 @@
 <body>
 
 <header>
-  <h1>Comp Watch</h1>
+  <div class="header-left">
+    <img class="header-logo" src="/static/mumbrellafooter.png" alt="Mumbrella">
+    <div class="header-pipe"></div>
+    <h1>COMP <span class="title-watch">WATCH</span></h1>
+  </div>
   <div id="status">
     <span id="pulse"></span>
     <span id="last-updated">Loading…</span>
